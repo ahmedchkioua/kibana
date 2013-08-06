@@ -88,18 +88,23 @@ angular.module('kibana.rawgraph', [])
     _.each(query.list,function(q) {
       boolQuery = boolQuery.should($scope.ejs.QueryStringQuery(q.query || '*'));
     });
+
+    var fieldQuery=[];
+    _.each($scope.panel.series, function(item, index) {
+      if ((!item.hide) && (typeof item.value_field !== 'undefined')) {
+        fieldQuery.push($scope.ejs.ExistsFilter(item.value_field));
+      }
+    });
+    var filterPart=[];
+    filterPart[0]=$scope.ejs.OrFilter(fieldQuery);
+    filterPart[1]=filterSrv.getBoolFilter(filterSrv.ids);
+    var filterQuery=$scope.ejs.AndFilter(filterPart);
     // Build the query
     request = request.query(
       $scope.ejs.FilteredQuery(
         boolQuery,
-        filterSrv.getBoolFilter(filterSrv.ids)
+        filterQuery
       ))
-      .highlight(
-        $scope.ejs.Highlight($scope.panel.highlight)
-        .fragmentSize(2147483647) // Max size of a 32bit unsigned int
-        .preTags('@start-highlight@')
-        .postTags('@end-highlight@')
-      )
       .size($scope.panel.max_point)
       .sort($scope.panel.time_field, "desc");
 
