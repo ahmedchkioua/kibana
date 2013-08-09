@@ -111,17 +111,34 @@ angular.module('kibana.histogram', [])
 
       var facet = $scope.ejs.DateHistogramFacet(id);
       
+      if($scope.panel.mode === 'weighted mean') {
+        var facetbis = $scope.ejs.DateHistogramFacet('_'+id);
+      }
+      
       if($scope.panel.mode === 'count') {
         facet = facet.field($scope.panel.time_field);
       } else {
-        if(_.isNull($scope.panel.value_field)) {
-          $scope.panel.error = "In " + $scope.panel.mode + " mode a field must be specified";
-          return;
+        if($scope.panel.mode === 'weighted mean') {
+          if((_.isNull($scope.panel.weight_field)) || (_.isNull($scope.panel.quantity_field))){
+            $scope.panel.error = "In " + $scope.panel.mode + " mode a weight field and a quantity field must be specified";
+            return;
+          }
+          facet = facet.keyField($scope.panel.time_field).valueField($scope.panel.weight_field);
+          facetbis = facetbis.keyField($scope.panel.time_field).valueField($scope.panel.quantity_field);
+        } else {
+          if(_.isNull($scope.panel.value_field)) {
+            $scope.panel.error = "In " + $scope.panel.mode + " mode a field must be specified";
+            return;
+          }
+          facet = facet.keyField($scope.panel.time_field).valueField($scope.panel.value_field);
         }
-        facet = facet.keyField($scope.panel.time_field).valueField($scope.panel.value_field);
       }
       facet = facet.interval($scope.panel.interval).facetFilter($scope.ejs.QueryFilter(query));
       request = request.facet(facet).size(0);
+      if($scope.panel.mode === 'weighted mean') {
+        facetbis = facetbis.interval($scope.panel.interval).facetFilter($scope.ejs.QueryFilter(query));
+        request = request.facet(facetbis).size(0);
+      }
     });
 
     // Populate the inspector panel
@@ -158,41 +175,54 @@ angular.module('kibana.histogram', [])
         var data, hits;
 
         _.each(query.ids, function(id) {
-          var v = results.facets[id];
-
-          // Null values at each end of the time range ensure we see entire range
-          if(_.isUndefined($scope.data[i]) || _segment === 0) {
-            data = [];
-            if(filterSrv.idsByType('time').length > 0) {
-              data = [[_range.from.getTime(), null],[_range.to.getTime(), null]];
+          if (id >= 0) {
+            var v = results.facets[id];
+            if ($scope.panel.mode === 'weighted mean'){
+              var vbis = results.facets['_'+id];
             }
-            hits = 0;
-          } else {
-            data = $scope.data[i].data;
-            hits = $scope.data[i].hits;
+
+            // Null values at each end of the time range ensure we see entire range
+            if(_.isUndefined($scope.data[i]) || _segment === 0) {
+              data = [];
+              if(filterSrv.idsByType('time').length > 0) {
+                data = [[_range.from.getTime(), null],[_range.to.getTime(), null]];
+              }
+              hits = 0;
+            } else {
+              data = $scope.data[i].data;
+              hits = $scope.data[i].hits;
+            }
+
+            // Assemble segments
+            var segment_data = [];
+            _.each(v.entries, function(v, k) {
+              if ($scope.panel.mode === 'weighted mean'){
+                if ((typeof vbis.entries[k]['total'] !== 'undefined') && (vbis.entries[k]['total'] !== 0)){
+                  segment_data.push([v.time,v['total']/vbis.entries[k]['total']]);
+                } else {
+                  segment_data.push([v.time,null]);
+                }
+              } else {
+                segment_data.push([v.time,v[$scope.panel.mode]]);
+              }
+              hits += v.count; // The series level hits counter
+              $scope.hits += v.count; // Entire dataset level hits counter
+            });
+            data.splice.apply(data,[1,0].concat(segment_data)); // Join histogram data
+
+            // Create the flot series object
+            var series = { 
+              data: {
+                info: $scope.queries.list[id],
+                data: data,
+                hits: hits
+              },
+            };
+
+            $scope.data[i] = series.data;
+
+            i++;
           }
-
-          // Assemble segments
-          var segment_data = [];
-          _.each(v.entries, function(v, k) {
-            segment_data.push([v.time,v[$scope.panel.mode]]);
-            hits += v.count; // The series level hits counter
-            $scope.hits += v.count; // Entire dataset level hits counter
-          });
-          data.splice.apply(data,[1,0].concat(segment_data)); // Join histogram data
-
-          // Create the flot series object
-          var series = { 
-            data: {
-              info: $scope.queries.list[id],
-              data: data,
-              hits: hits
-            },
-          };
-
-          $scope.data[i] = series.data;
-
-          i++;
         });
 
         // Tell the histogram directive to render.
